@@ -1,9 +1,34 @@
 import { useState } from 'react';
 import { MapPin, Heart, CalendarPlus, Loader2, AlertCircle, CalendarDays } from 'lucide-react';
 import type { EventItem } from '@/data';
-import { formatDateParts } from '@/data';
 import { supabase } from '@/lib/supabase';
 import { FALLBACK_EVENTS } from '@/data';
+
+// Safari/iOS-biztos dátumformázó segédfüggvény
+function safeFormatDateParts(dateStr?: string): { month: string; day: string } {
+  const months = ['JAN', 'FEB', 'MÁRC', 'ÁPR', 'MÁJ', 'JÚN', 'JÚL', 'AUG', 'SZEPT', 'OKT', 'NOV', 'DEC'];
+  if (!dateStr) return { month: 'INFO', day: '' };
+
+  // Számok kinyerése (pl. 2026. 08. 31. vagy 2026-08-31)
+  const numbers = dateStr.match(/\d+/g);
+  if (numbers && numbers.length >= 3) {
+    const monthIndex = parseInt(numbers[1], 10) - 1;
+    const day = parseInt(numbers[2], 10).toString();
+    const month = months[monthIndex] || 'INFO';
+    return { month, day: isNaN(parseInt(day, 10)) ? '' : day };
+  }
+
+  const cleaned = dateStr.replace(/\./g, '-').trim();
+  const parsed = new Date(cleaned);
+  if (!isNaN(parsed.getTime())) {
+    return {
+      month: months[parsed.getMonth()] || 'INFO',
+      day: parsed.getDate().toString(),
+    };
+  }
+
+  return { month: 'INFO', day: '' };
+}
 
 export default function EventsTab({
   events,
@@ -58,7 +83,7 @@ export default function EventsTab({
   const toggle = async (ev: EventItem) => {
     if (pending) return;
     const wasOn = !!localInterest[ev.id];
-    const next = wasOn ? ev.interested : ev.interested + 1;
+    const next = wasOn ? (ev.interested || 0) : (ev.interested || 0) + 1;
     setLocalInterest((s) => ({ ...s, [ev.id]: !wasOn }));
 
     if (!supabase || FALLBACK_EVENTS.some((e) => e.id === ev.id)) {
@@ -69,7 +94,7 @@ export default function EventsTab({
     setPending(ev.id);
     const { error } = await supabase
       .from('events')
-      .update({ interested: next })
+      .update({ interested: next, interested_count: next, interestedCount: next })
       .eq('id', ev.id);
     setPending(null);
     if (error) {
@@ -80,7 +105,19 @@ export default function EventsTab({
   };
 
   const addToCalendar = (ev: EventItem) => {
-    const d = new Date(ev.date + 'T' + ev.time);
+    let d = new Date();
+    const numbers = ev.date?.match(/\d+/g);
+    const timeNumbers = ev.time?.match(/\d+/g);
+
+    if (numbers && numbers.length >= 3) {
+      const year = parseInt(numbers[0], 10);
+      const month = parseInt(numbers[1], 10) - 1;
+      const day = parseInt(numbers[2], 10);
+      const hours = timeNumbers && timeNumbers.length >= 1 ? parseInt(timeNumbers[0], 10) : 20;
+      const minutes = timeNumbers && timeNumbers.length >= 2 ? parseInt(timeNumbers[1], 10) : 0;
+      d = new Date(year, month, day, hours, minutes);
+    }
+
     const end = new Date(d.getTime() + 60 * 60 * 1000);
     const fmt = (x: Date) => x.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const ics = [
@@ -93,7 +130,7 @@ export default function EventsTab({
       `DTSTART:${fmt(d)}`,
       `DTEND:${fmt(end)}`,
       `SUMMARY:${ev.title}`,
-      `LOCATION:${ev.location}`,
+      `LOCATION:${ev.location || 'JUGYU'}`,
       'END:VEVENT',
       'END:VCALENDAR',
     ].join('\r\n');
@@ -109,9 +146,11 @@ export default function EventsTab({
   return (
     <div className="px-4 pt-4 pb-28 space-y-3">
       {events.map((ev, i) => {
-        const { month, day } = formatDateParts(ev.date);
+        const { month, day } = safeFormatDateParts(ev.date);
         const isOn = !!localInterest[ev.id];
         const isPending = pending === ev.id;
+        const interestCount = (ev.interested || 0) + (isOn ? 1 : 0);
+
         return (
           <article
             key={ev.id}
@@ -150,7 +189,7 @@ export default function EventsTab({
                   ) : (
                     <Heart size={14} fill={isOn ? 'currentColor' : 'none'} />
                   )}
-                  Érdekel · {ev.interested + (isOn ? 1 : 0)}
+                  Érdekel · {interestCount}
                 </button>
                 <button
                   onClick={() => addToCalendar(ev)}
